@@ -1048,7 +1048,6 @@ dependencies = [
  "cw-storage-plus",
  "cw2",
  "derive_more",
- "schemars",
  "serde",
  "serde_json",
 ]
