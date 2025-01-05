@@ -1,14 +1,16 @@
-#![deny(warnings)]
 pub mod auth;
 pub mod coin;
-pub mod error;
+pub mod err;
 pub mod fund;
 pub mod math;
-pub mod validate;
+pub mod valid;
 
 pub use auth::*;
 pub use coin::*;
-pub use error::*;
+pub use err::*;
 pub use fund::*;
 pub use math::*;
-pub use validate::*;
+pub use valid::*;
+
+/// Type alias for `std::result::Result` with contract defaults.
+pub(crate) type Result<T = (), E = XcosmError> = core::result::Result<T, E>;

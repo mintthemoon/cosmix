@@ -1,38 +1,6 @@
 use cosmwasm_std::Coin;
 
-use crate::CoinSet;
-
-pub type MathResult<T=()> = Result<T, MathError>;
-
-#[derive(Debug, thiserror::Error, miette::Diagnostic)]
-pub enum MathError {
-  #[error(transparent)]
-  Container(#[from] ContainerError),
-
-  #[error(transparent)]
-  Value(#[from] ValueError),
-}
-
-#[derive(Debug, thiserror::Error, miette::Diagnostic)]
-pub enum ContainerError {
-  #[error("Overflow in math operation")]
-  Overflow {},
-
-  #[error("Underflow in math operation")]
-  Underflow {},
-}
-
-#[derive(Debug, thiserror::Error, miette::Diagnostic)]
-pub enum ValueError {
-  #[error("Divide by zero in math operation")]
-  DivideByZero {},
-}
-
-impl From<cosmwasm_std::OverflowError> for MathError {
-  fn from(_: cosmwasm_std::OverflowError) -> Self {
-    ContainerError::Overflow {}.into()
-  }
-}
+use crate::{CoinSet, Result, XcosmError};
 
 pub trait TryPlus<T> {
   type Output;
@@ -43,9 +11,9 @@ pub trait TryPlus<T> {
 
 impl TryPlus<&Coin> for CoinSet {
   type Output = Self;
-  type Error = MathError;
+  type Error = XcosmError;
 
-  fn try_plus(&self, other: &Coin) -> MathResult<Self> {
+  fn try_plus(&self, other: &Coin) -> Result<Self> {
     let mut res = self.clone();
     let mut is_err = false;
     res
@@ -55,7 +23,7 @@ impl TryPlus<&Coin> for CoinSet {
         Err(_) => is_err = true,
       });
     match is_err {
-      true => Err(ContainerError::Overflow {}.into()),
+      true => XcosmError::MathOverflow {}.into(),
       false => Ok(res),
     }
   }
@@ -63,9 +31,9 @@ impl TryPlus<&Coin> for CoinSet {
 
 impl TryPlus<&CoinSet> for CoinSet {
   type Output = Self;
-  type Error = MathError;
+  type Error = XcosmError;
 
-  fn try_plus(&self, other: &CoinSet) -> MathResult<Self> {
+  fn try_plus(&self, other: &CoinSet) -> Result<Self> {
     let mut res = self.clone();
     let mut is_err = false;
     for (denom, amount) in other.iter() {
@@ -77,7 +45,7 @@ impl TryPlus<&CoinSet> for CoinSet {
       });
     }
     match is_err {
-      true => Err(ContainerError::Overflow {}.into()),
+      true => XcosmError::MathOverflow {}.into(),
       false => Ok(res),
     }
   }
@@ -90,9 +58,9 @@ pub trait TryPlusMut<T> {
 }
 
 impl TryPlusMut<&Coin> for CoinSet {
-  type Error = MathError;
+  type Error = XcosmError;
 
-  fn try_plus_mut(&mut self, other: &Coin) -> MathResult {
+  fn try_plus_mut(&mut self, other: &Coin) -> Result {
     let mut is_err = false;
     self.entry(other.denom.clone()).and_modify(|amount| {
       match (*amount).checked_sub(other.amount) {
@@ -101,16 +69,16 @@ impl TryPlusMut<&Coin> for CoinSet {
       }
     });
     match is_err {
-      true => Err(ContainerError::Underflow {}.into()),
+      true => XcosmError::MathOverflow {}.into(),
       false => Ok(()),
     }
   }
 }
 
 impl TryPlusMut<&CoinSet> for CoinSet {
-  type Error = MathError;
+  type Error = XcosmError;
 
-  fn try_plus_mut(&mut self, other: &CoinSet) -> MathResult {
+  fn try_plus_mut(&mut self, other: &CoinSet) -> Result {
     let mut is_err = false;
     for (denom, amount) in other.iter() {
       self.entry(denom.clone()).and_modify(|self_amount| {
@@ -121,7 +89,7 @@ impl TryPlusMut<&CoinSet> for CoinSet {
       });
     }
     match is_err {
-      true => Err(ContainerError::Overflow {}.into()),
+      true => XcosmError::MathOverflow {}.into(),
       false => Ok(()),
     }
   }
@@ -136,9 +104,9 @@ pub trait TryMinus<T> {
 
 impl TryMinus<&Coin> for CoinSet {
   type Output = Self;
-  type Error = MathError;
+  type Error = XcosmError;
 
-  fn try_minus(&self, other: &Coin) -> MathResult<Self> {
+  fn try_minus(&self, other: &Coin) -> Result<Self> {
     let mut res = self.clone();
     let mut is_err = false;
     res
@@ -148,7 +116,7 @@ impl TryMinus<&Coin> for CoinSet {
         Err(_) => is_err = true,
       });
     match is_err {
-      true => Err(ContainerError::Underflow {}.into()),
+      true => XcosmError::MathUnderflow {}.into(),
       false => Ok(res),
     }
   }
@@ -156,9 +124,9 @@ impl TryMinus<&Coin> for CoinSet {
 
 impl TryMinus<&CoinSet> for CoinSet {
   type Output = Self;
-  type Error = MathError;
+  type Error = XcosmError;
 
-  fn try_minus(&self, other: &CoinSet) -> MathResult<Self> {
+  fn try_minus(&self, other: &CoinSet) -> Result<Self> {
     let mut res = self.clone();
     let mut is_err = false;
     for (denom, amount) in other.iter() {
@@ -170,7 +138,7 @@ impl TryMinus<&CoinSet> for CoinSet {
       });
     }
     match is_err {
-      true => Err(ContainerError::Underflow {}.into()),
+      true => XcosmError::MathUnderflow {}.into(),
       false => Ok(res),
     }
   }
@@ -183,9 +151,9 @@ pub trait TryMinusMut<T> {
 }
 
 impl TryMinusMut<&Coin> for CoinSet {
-  type Error = MathError;
+  type Error = XcosmError;
 
-  fn try_minus_mut(&mut self, other: &Coin) -> MathResult {
+  fn try_minus_mut(&mut self, other: &Coin) -> Result {
     let mut is_err = false;
     self.entry(other.denom.clone()).and_modify(|amount| {
       match (*amount).checked_sub(other.amount) {
@@ -194,16 +162,16 @@ impl TryMinusMut<&Coin> for CoinSet {
       }
     });
     match is_err {
-      true => Err(ContainerError::Underflow {}.into()),
+      true => XcosmError::MathUnderflow {}.into(),
       false => Ok(()),
     }
   }
 }
 
 impl TryMinusMut<&CoinSet> for CoinSet {
-  type Error = MathError;
+  type Error = XcosmError;
 
-  fn try_minus_mut(&mut self, other: &CoinSet) -> MathResult {
+  fn try_minus_mut(&mut self, other: &CoinSet) -> Result {
     let mut is_err = false;
     for (denom, amount) in other.iter() {
       self.entry(denom.clone()).and_modify(|self_amount| {
@@ -214,7 +182,7 @@ impl TryMinusMut<&CoinSet> for CoinSet {
       });
     }
     match is_err {
-      true => Err(ContainerError::Underflow {}.into()),
+      true => XcosmError::MathUnderflow {}.into(),
       false => Ok(()),
     }
   }

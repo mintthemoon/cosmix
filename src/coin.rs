@@ -4,54 +4,12 @@ use std::iter::Map;
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-  to_json_binary, Addr, AnyMsg, BankMsg, Coin, Coins, CoinsError, CosmosMsg, Uint128,
+  to_json_binary, Addr, AnyMsg, BankMsg, Coin, Coins, CosmosMsg, Uint128,
 };
-use derive_deref::{Deref, DerefMut};
+use derive_more::{Deref, DerefMut};
 use serde::{ser::SerializeSeq, Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{TryMinusMut, XcosmError, XcosmResult};
-
-#[derive(Debug, thiserror::Error, miette::Diagnostic)]
-pub enum CoinError {
-  /// Coins do not meet the expected amount.
-  #[error("Insufficient coins provided: expected {expected:?}")]
-  Insufficient { expected: String },
-
-  /// Expected no coins, but received some.
-  #[error("Empty coins required")]
-  NotEmpty {},
-
-  /// Action requires exact coins.
-  #[error("Exact coins required: {expected:?}")]
-  NotExact { expected: String },
-
-  /// Coins lists cannot have duplicate denoms.
-  #[error("Duplicate denom in coins: {denom:?}")]
-  DuplicateDenom { denom: String },
-
-  /// Expected coins, but received none.
-  #[error("Non-empty coins required")]
-  Empty {},
-
-  /// Input/output match error for sending coins.
-  #[error("Input coins and output coins must have equal values")]
-  IoMismatch {},
-
-  /// Coin error which _should_ never occur.
-  #[error("Unexpected coin error: {msg:?}")]
-  Unexpected { msg: String },
-}
-
-impl From<CoinsError> for CoinError {
-  /// Convert a [`CoinsError`] into a [`CoinError`].
-  fn from(e: CoinsError) -> Self {
-    match e {
-      CoinsError::DuplicateDenom => CoinError::DuplicateDenom {
-        denom: "".to_string(),
-      },
-    }
-  }
-}
+use crate::{Result, TryMinusMut, XcosmError};
 
 /// Sorted and dupe-checked map of coins that serializes as a list.
 #[derive(Debug, Clone, PartialEq, Eq, Deref, DerefMut)]
@@ -66,11 +24,11 @@ impl CoinSet {
   /// Insert the amount into the set.
   ///
   /// Requires the denom to not already be present.
-  pub fn try_insert(&mut self, denom: &String, amount: Uint128) -> XcosmResult<&mut Uint128> {
+  pub fn try_insert(&mut self, denom: &String, amount: Uint128) -> Result<&mut Uint128> {
     match self.entry(denom.clone()) {
       Entry::Occupied(entry) => Err(
-        CoinError::DuplicateDenom {
-          denom: entry.key().to_string(),
+        XcosmError::CoinsDuplicate {
+          denom: Some(entry.key().to_string()),
         }
         .into(),
       ),
@@ -87,33 +45,23 @@ impl CoinSet {
   /// valid, or an error if the denom is not present or less than the expected amount.
   ///
   /// Require coins to contain the expected denom in at least the expected amount.
-  pub fn expect_coin(&self, expected: &Coin) -> XcosmResult<&Uint128> {
+  pub fn expect_coin(&self, expected: &Coin) -> Result<&Uint128> {
     self
       .get(&expected.denom)
       .filter(|&amount| amount >= &expected.amount)
-      .ok_or_else(|| {
-        CoinError::Insufficient {
-          expected: expected.denom.clone(),
-        }
-        .into()
-      })
+      .ok_or_else(|| XcosmError::coins_insufficient(expected.denom.clone()))
   }
 
   /// Require coins to contain only the expected denom at exactly the expected amount.
-  pub fn expect_coin_exact(&self, expected: &Coin) -> XcosmResult {
+  pub fn expect_coin_exact(&self, expected: &Coin) -> Result {
     if self.expect_coin(expected)? != &expected.amount {
-      return Err(
-        CoinError::NotExact {
-          expected: expected.to_string(),
-        }
-        .into(),
-      );
+      return XcosmError::coins_not_exact(expected.to_string()).into();
     }
     Ok(())
   }
 
   /// Require coins to contain all the expected denoms in at least the expected amounts.
-  pub fn expect_coins<'a, I>(&self, expected: impl IntoIterator<Item=Coin>) -> XcosmResult {
+  pub fn expect_coins<'a, I>(&self, expected: impl IntoIterator<Item = Coin>) -> Result {
     expected
       .into_iter()
       .map(|c| self.expect_coin(&c))
@@ -122,7 +70,7 @@ impl CoinSet {
   }
 
   /// Require coins to contain only the expected denoms at exactly the expected amounts.
-  pub fn expect_coins_exact(&self, expected: impl IntoIterator<Item=Coin>) -> XcosmResult {
+  pub fn expect_coins_exact(&self, expected: impl IntoIterator<Item = Coin>) -> Result {
     expected
       .into_iter()
       .map(|c| self.expect_coin_exact(&c))
@@ -131,32 +79,32 @@ impl CoinSet {
   }
 
   /// Require coins to be empty.
-  pub fn expect_none(&self) -> XcosmResult {
+  pub fn expect_none(&self) -> Result {
     if !self.is_empty() {
-      return Err(CoinError::NotEmpty {}.into());
+      return XcosmError::coins_not_exact("<none>").into();
     }
     Ok(())
   }
 
   /// Require coins to not be empty.
-  pub fn expect_some(&self) -> XcosmResult<&Self> {
+  pub fn expect_some(&self) -> Result<&Self> {
     if self.is_empty() {
-      return Err(CoinError::Empty {}.into());
+      return XcosmError::coins_insufficient("<any>").into();
     }
     Ok(self)
   }
 
-  pub fn send(&self, to: &Addr) -> XcosmResult<CosmosMsg> {
+  pub fn send(&self, to: &Addr) -> Result<CosmosMsg> {
     match self.len() {
       0..1 => Ok(send_coin(
-        self.into_iter().next().ok_or_else(|| CoinError::Empty {})?,
+        self.into_iter().next().ok_or_else(|| XcosmError::coins_not_exact("<none>"))?,
         to,
       )),
       _ => Ok(send_coins(self.expect_some()?, to)),
     }
   }
 
-  pub fn send_many(&self, from: &Addr, output: Vec<(&Addr, CoinSet)>) -> XcosmResult<CosmosMsg> {
+  pub fn send_many(&self, from: &Addr, output: Vec<(&Addr, CoinSet)>) -> Result<CosmosMsg> {
     send_coins_many(self, from, output)
   }
 }
@@ -198,7 +146,7 @@ impl std::fmt::Display for CoinSet {
 impl TryFrom<Coins> for CoinSet {
   type Error = XcosmError;
 
-  fn try_from(coins: Coins) -> XcosmResult<Self> {
+  fn try_from(coins: Coins) -> Result<Self> {
     coins.try_into_coin_set()
   }
 }
@@ -209,7 +157,7 @@ impl TryFrom<Vec<Coin>> for CoinSet {
   /// Create [`CoinSet`] from an unsorted `Vec<Coin>`.
   ///
   /// Requires the provided list to contain no duplicates.
-  fn try_from(raw: Vec<Coin>) -> XcosmResult<Self> {
+  fn try_from(raw: Vec<Coin>) -> Result<Self> {
     raw.try_into_coin_set()
   }
 }
@@ -252,7 +200,7 @@ pub trait TryIntoCoinSet {
   fn try_into_coin_set(self) -> Result<CoinSet, Self::Error>;
 }
 
-impl<T: IntoIterator<Item=Coin>> TryIntoCoinSet for T {
+impl<T: IntoIterator<Item = Coin>> TryIntoCoinSet for T {
   type Error = XcosmError;
 
   fn try_into_coin_set(self) -> Result<CoinSet, Self::Error> {
@@ -308,34 +256,31 @@ pub fn send_coins_many(
   coins: &CoinSet,
   from: &Addr,
   to: Vec<(&Addr, CoinSet)>,
-) -> XcosmResult<CosmosMsg> {
+) -> Result<CosmosMsg> {
   let mut rem: CoinSet = coins.clone();
   let mut outputs: Vec<BankMsgIo> = Vec::with_capacity(to.len());
   for (addr, out_coins) in to.into_iter() {
     for coin in out_coins.into_iter() {
       rem
         .try_minus_mut(&coin)
-        .map_err(|_| CoinError::Insufficient {
-          expected: coin.to_string(),
-        })?;
+        .map_err(|_| XcosmError::coins_insufficient(coin.to_string()))?;
       outputs.push(BankMsgIo {
         address: addr.clone(),
         coins: vec![coin],
       });
     }
   }
-  rem.expect_none().map_err(|_| CoinError::IoMismatch {})?;
+  rem
+    .expect_none()
+    .map_err(|_| XcosmError::CoinsMismatch {})?;
   let inputs: Vec<BankMsgIo> = vec![BankMsgIo {
     address: from.clone(),
     coins: coins.into(),
   }];
   Ok(CosmosMsg::Any(AnyMsg {
     type_url: "/cosmos.bank.v1beta1.MsgMultiSend".to_string(),
-    value: to_json_binary(&BankMsgMultiSend { inputs, outputs }).map_err(|err| {
-      CoinError::Unexpected {
-        msg: format!("unable to serialize BankMsgMultiSend: {}", err),
-      }
-    })?,
+    value: to_json_binary(&BankMsgMultiSend { inputs, outputs })
+      .map_err(|err| XcosmError::any(format!("unable to serialize BankMsgMultiSend: {}", err)))?,
   }))
 }
 
@@ -344,7 +289,7 @@ pub fn send_coins_many(
   _coins: &CoinSet,
   _from: &Addr,
   to: Vec<(&Addr, CoinSet)>,
-) -> CoinResult<CosmosMsg> {
+) -> Result<CosmosMsg> {
   to.into_iter()
     .map(|(addr, out_coins)| send_coins(out_coins.into(), addr))
     .collect()

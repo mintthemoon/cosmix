@@ -1,17 +1,10 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::Addr;
 
-use crate::XcosmResult;
+use crate::{Result, XcosmError};
 
-#[derive(Debug, thiserror::Error, miette::Diagnostic)]
-pub enum AuthError {
-  #[error("Requestor is not authorized")]
-  Unauthorized {},
-}
-
-/// Auth handler.
 #[cw_serde]
-pub enum Authorized<T: Eq+ToString=Addr> {
+pub enum Authorized<T: Eq + ToString = Addr> {
   /// Single authorized address.
   One(T),
   /// Multiple authorized addresses.
@@ -22,10 +15,12 @@ pub enum Authorized<T: Eq+ToString=Addr> {
   Any,
 }
 
-impl<T: Eq+ToString> Authorized<T> {
+impl<T: Eq + ToString> Authorized<T> {
   /// Create a new `Authorized` group.
   pub fn new<'a, U: Into<&'a [T]>>(group: U) -> Self
-  where T: Clone+'a {
+  where
+    T: Clone + 'a,
+  {
     let authorized: &[T] = group.into();
     match authorized.len() {
       0 => Authorized::None,
@@ -37,28 +32,29 @@ impl<T: Eq+ToString> Authorized<T> {
   /// Authorize a single requestor.
   ///
   /// Requires requestor to match authorized.
-  pub fn authorize(&self, requestor: &T) -> XcosmResult {
+  pub fn authorize(&self, requestor: &T) -> Result {
     match self {
       Authorized::One(authorized) => {
         if authorized != requestor {
-          return Err(AuthError::Unauthorized {}.into());
+          return XcosmError::unauthorized().into();
         }
+        Ok(())
       }
       Authorized::Many(authorized) => {
         if !authorized.contains(requestor) {
-          return Err(AuthError::Unauthorized {}.into());
+          return XcosmError::unauthorized().into();
         }
+        Ok(())
       }
-      Authorized::None => return Err(AuthError::Unauthorized {}.into()),
-      Authorized::Any => return Ok(()),
-    };
-    Ok(())
+      Authorized::None => XcosmError::unauthorized().into(),
+      Authorized::Any => Ok(()),
+    }
   }
 
   /// Authorize any of the requestors.
   ///
   /// Requires at least one of `requestors` to match authorized.
-  pub fn authorize_any(&self, requestors: &Vec<T>) -> XcosmResult {
+  pub fn authorize_any(&self, requestors: &Vec<T>) -> Result {
     match match self {
       Authorized::One(authorized) => requestors.contains(authorized),
       Authorized::Many(authorized) => requestors.iter().any(|r| authorized.contains(r)),
@@ -66,14 +62,14 @@ impl<T: Eq+ToString> Authorized<T> {
       Authorized::Any => true,
     } {
       true => Ok(()),
-      false => Err(AuthError::Unauthorized {}.into()),
+      false => XcosmError::unauthorized().into(),
     }
   }
 
   /// Authorize all of the requestors.
   ///
   /// Requires all of `requestors` to match authorized.
-  pub fn authorize_all(&self, requestors: &Vec<T>) -> XcosmResult {
+  pub fn authorize_all(&self, requestors: &Vec<T>) -> Result {
     match match self {
       Authorized::One(authorized) => requestors.contains(authorized),
       Authorized::Many(authorized) => requestors.iter().all(|r| authorized.contains(r)),
@@ -81,14 +77,14 @@ impl<T: Eq+ToString> Authorized<T> {
       Authorized::Any => true,
     } {
       true => Ok(()),
-      false => Err(AuthError::Unauthorized {}.into()),
+      false => XcosmError::unauthorized().into(),
     }
   }
 
   /// Authorize at least `min` of the requestors.
   ///
   /// Requires at least `min` of `requestors` to match authorized.
-  pub fn authorize_at_least(&self, requestors: &Vec<T>, min: u32) -> XcosmResult {
+  pub fn authorize_at_least(&self, requestors: &Vec<T>, min: u32) -> Result {
     match match self {
       Authorized::One(authorized) => requestors.contains(authorized),
       Authorized::Many(authorized) => {
@@ -98,18 +94,18 @@ impl<T: Eq+ToString> Authorized<T> {
       Authorized::Any => true,
     } {
       true => Ok(()),
-      false => Err(AuthError::Unauthorized {}.into()),
+      false => XcosmError::unauthorized().into(),
     }
   }
 }
 
-impl<T: Eq+ToString> Default for Authorized<T> {
+impl<T: Eq + ToString> Default for Authorized<T> {
   fn default() -> Self {
     Authorized::None
   }
 }
 
-impl<T: Eq+ToString, U: From<T>> Into<Vec<U>> for Authorized<T> {
+impl<T: Eq + ToString, U: From<T>> Into<Vec<U>> for Authorized<T> {
   fn into(self) -> Vec<U> {
     match self {
       Authorized::One(authorized) => vec![authorized.into()],
